@@ -2,7 +2,7 @@
 
 # What Makes a Long-Context Monitor Fire Falsely?
 
-**Authors:** Lucas Sebastian Hübner and Max Elliot Hübner
+**Author:** Max Elliot Hübner
 
 This repository contains the code and experiments for a small mechanistic-interpretability project studying how a linear activation monitor trained on short examples behaves when applied repeatedly inside longer contexts.
 
