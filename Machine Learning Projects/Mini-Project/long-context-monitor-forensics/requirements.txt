@@ -1,0 +1,14 @@
+# Tested target environment: Python 3.12.
+# The numerical unit tests need only NumPy, PyTorch, and pytest. The full
+# research path additionally loads Gemma 2 and Gemma Scope through
+# TransformerLens and SAE Lens.
+numpy==2.5.2
+torch==2.13.0
+matplotlib==3.11.1
+transformer-lens==3.8.0
+sae-lens==6.49.1
+pytest==9.1.1
+jupyterlab==4.6.3
+ipykernel>=6.30,<7
+nbformat>=5.10,<6
+nbclient==0.11.0
