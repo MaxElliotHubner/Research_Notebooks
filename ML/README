@@ -1,1 +1,239 @@
-README
+# Long-Context Monitor Forensics
+
+A mechanistic interpretability mini-project investigating why a harmful-intent monitor trained on short contexts can produce false positives on long, benign contexts.
+
+## Overview
+
+Safety monitors are often trained and evaluated on relatively short inputs, but deployed models operate on much longer contexts. A monitor that performs well locally can therefore behave unexpectedly once many individually benign or ambiguous pieces of text are combined.
+
+This project asks:
+
+> **When a harmful-intent monitor trained on short prompts produces false positives in longer benign contexts, what causes those failures?**
+
+The project builds a controlled synthetic benchmark, trains a linear activation probe, measures how its false-positive behavior changes with context length and context composition, and then uses internal activations and sparse autoencoder (SAE) features to investigate the mechanism behind those failures.
+
+The broader goal is to separate two possible explanations:
+
+1. **A statistical length effect:** if a short segment has some small probability of triggering the monitor, scanning many segments may eventually produce a false alarm simply through repeated opportunities to fail.
+2. **A representation-level effect:** combining benign or near-miss material into a long context may systematically change the model's internal representations in a way that makes the monitor fire more strongly than the independent-error baseline predicts.
+
+---
+
+## Experimental pipeline
+
+The project follows a
+
+**data → activations → probe → metrics → forensics**
+
+pipeline.
+
+### 1. Controlled synthetic data
+
+The benchmark contains several kinds of short text segments, including:
+
+* **neutral** segments,
+* **near-miss** segments that share surface or semantic properties with genuinely positive examples without actually satisfying the target criterion,
+* **positive** segments representing the behavior the monitor is intended to detect.
+
+Template families are split at the **family level** into train, development, and test sets. All examples generated from one template family remain in the same split, preventing train/test leakage.
+
+Short segments are then composed into longer contexts while controlling quantities such as context length and the number of near-miss segments.
+
+This makes it possible to compare long contexts that are similar in length but differ in composition.
+
+### 2. Activation extraction
+
+The project runs the contexts through Gemma and extracts residual-stream activations at selected segment boundaries.
+
+The default configuration uses:
+
+* **Model:** Gemma 2 2B
+* **TransformerLens model:** `gemma-2-2b`
+* **Activation site:** `blocks.12.hook_resid_post`
+
+Contexts retain their segment structure during tokenization so that probe scores can be associated with individual parts of the long context rather than only with the final sequence representation.
+
+### 3. Linear monitor
+
+A linear probe is trained on internal activations from the short-context task.
+
+The probe can then be evaluated at individual segment boundaries inside a longer context. Segment-level scores can be pooled into a context-level monitor score, allowing the short-context monitor to be tested under increasing context length.
+
+The code also supports constructing a simple mean-difference direction as an interpretable baseline.
+
+### 4. False-positive analysis
+
+Evaluation includes:
+
+* confusion rates,
+* false-positive and true-positive rates,
+* AUROC,
+* metrics grouped by context type,
+* bootstrap confidence intervals,
+* segment-level and context-level monitor scores.
+
+A central baseline is the false-positive rate expected from repeated independent opportunities to fail.
+
+If the short-context false-positive probability is \(p\), then under an IID approximation the probability of at least one false positive among \(n\) opportunities is
+
+$$
+\mathrm{FPR}_{\max}(n)
+=
+1-(1-p)^n.
+$$
+
+The empirical long-context false-positive rate can therefore be compared with this baseline.
+
+A large excess over the IID prediction is evidence that context composition is doing more than simply giving the monitor additional independent chances to make a mistake.
+
+### 5. SAE-based forensics
+
+The mechanistic analysis uses a Gemma Scope sparse autoencoder to examine which interpretable latent features contribute to monitor activation.
+
+The default SAE configuration is:
+
+* **Gemma Scope release:** `gemma-scope-2b-pt-res-canonical`
+* **SAE:** `layer_12/width_16k/canonical`
+
+The aim is to identify features associated with false-positive monitor behavior and determine whether the failure can be localized to a relatively small set of internal directions or SAE features.
+
+---
+
+## Repository structure
+
+```text
+.
+├── notebooks/
+│   └── 00_main_research_workbook.ipynb
+│
+├── src/
+│   └── long_context_monitor_lab/
+│       ├── __init__.py
+│       ├── config.py
+│       ├── data.py
+│       ├── model_access.py
+│       ├── activations.py
+│       ├── probe.py
+│       └── metrics.py
+│
+├── tests/
+│
+└── pyproject.toml
+```
+
+The main notebook contains the end-to-end experiment, while the underlying functionality is kept in separate modules so that each part of the pipeline can be tested independently.
+
+### Main modules
+
+**`data.py`**
+
+Constructs and splits the synthetic benchmark. This includes family-level train/dev/test splitting, leakage auditing, and composition of short segments into controlled long contexts.
+
+**`model_access.py`**
+
+Loads the language model and Gemma Scope SAE used in the experiments.
+
+**`activations.py`**
+
+Handles segmented tokenization, padding, segment-boundary bookkeeping, and extraction of model activations at monitored positions.
+
+**`probe.py`**
+
+Implements the linear monitor, probe fitting, mean-difference directions, segment-level logits, pooling, and threshold selection.
+
+**`metrics.py`**
+
+Implements confusion-rate calculations, AUROC, grouped evaluation, IID false-positive baselines, empirical long-context false-positive rates, and bootstrap confidence intervals.
+
+---
+
+## Installation
+
+Create and activate a virtual environment from the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Install the project in editable mode:
+
+```bash
+python -m pip install --upgrade pip
+pip install -e .
+```
+
+The experiments require packages including PyTorch, TransformerLens, SAE Lens, Hugging Face/Transformers, NumPy, scikit-learn, Jupyter, and pytest.
+
+### Gemma access
+
+Gemma model weights are not included in this repository.
+
+The default experiment uses `google/gemma-2-2b`, which requires access through Hugging Face. Before running the model-loading section:
+
+1. create or sign in to a Hugging Face account,
+2. accept the Gemma model license,
+3. authenticate your local environment with Hugging Face.
+
+The Gemma Scope SAE is loaded separately through SAE Lens.
+
+---
+
+## Running the project
+
+Run the test suite with
+
+```bash
+pytest -q
+```
+
+Then launch Jupyter:
+
+```bash
+jupyter notebook
+```
+
+and open
+
+```text
+notebooks/00_main_research_workbook.ipynb
+```
+
+The notebook performs the complete analysis, from constructing the synthetic benchmark through model loading, activation extraction, probe fitting, long-context evaluation, and mechanistic analysis.
+
+---
+
+## What this project is testing
+
+The main scientific distinction is between **length-induced failure** and **structure-induced failure**.
+
+Suppose a monitor has a small false-positive rate on isolated short inputs. Its false-positive rate must increase when it is effectively applied many times inside a long context, even if nothing about its underlying behavior changes.
+
+That observation alone therefore does not establish a new long-context failure mode.
+
+The more interesting question is whether particular long-context structures—especially repeated near-miss material—cause the empirical failure probability or monitor score to grow **faster than the corresponding short-context baseline predicts**.
+
+The synthetic construction in this repository is intended to make that comparison explicit and experimentally controllable.
+
+---
+
+## Limitations
+
+This is a small mechanistic interpretability study rather than a production safety-monitor evaluation.
+
+In particular:
+
+* the benchmark is synthetic,
+* the default experiments use a relatively small language model,
+* the primary monitor is linear,
+* SAE features provide a useful decomposition of activations but are not automatically causal explanations,
+* results may depend on the chosen model layer, SAE, pooling rule, and synthetic data distribution.
+
+The project is therefore best viewed as a controlled case study of long-context monitor failure and a framework for testing more realistic monitors and datasets.
+
+---
+
+## Research question in one sentence
+
+**Can the false positives of a short-context safety monitor on long benign inputs be explained by simple accumulation of short-context errors, or do long contexts create a distinct internal representation-level failure mode?**
+
